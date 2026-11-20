@@ -1,0 +1,52 @@
+# Compiled object files & dependencies
+*.o
+*.obj
+*.d
+*.lo
+*.slo
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Static & shared libraries
+*.a
+*.la
+*.lai
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Executables & build output
+*.out
+*.exe
+app
+build/
+bin/
+dist/
+
+# Debug & profiling files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+*.gcno
+*.gcda
+*.gcov
+core
+vgcore.*
+
+*.json.tmp
+*.json.bak
+!example-config.json
+!config.example.json
+
+# Editor & IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.clangd/
+compile_commands.json
