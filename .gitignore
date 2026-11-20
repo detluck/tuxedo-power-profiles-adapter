@@ -21,7 +21,7 @@
 # Executables & build output
 *.out
 *.exe
-app
+tcc-power-profiles
 build/
 bin/
 dist/
