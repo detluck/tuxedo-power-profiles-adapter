@@ -18,7 +18,7 @@ PKG_CONFIG := pkg-config
 PACKAGES   := libsystemd json-c
 
 CPPFLAGS += $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
-CFLAGS   += -Wall -Wextra -Wpedantic -std=c11 -g -MMD -MP
+CFLAGS   += -Wall -Wextra -Wpedantic -std=gnu11 -g -MMD -MP
 LDLIBS   += $(shell $(PKG_CONFIG) --libs $(PACKAGES))
 
 # Config
