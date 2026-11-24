@@ -6,7 +6,7 @@ BUILD_DIR := build
 # Source files
 SOURCES := \
 	main.c \
-	profile_mapping.c \
+	$(wildcard config/*.c) \
 	$(wildcard tcc/*.c) \
   $(wildcard ppd/*.c)
 
