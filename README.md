@@ -1,4 +1,4 @@
-# tuxedo-ppd-adapter (`tcc-power-profiles`)
+# Tuxedo power profies adapter
 
 A lightweight C daemon that acts as a drop-in D-Bus bridge between **`power-profiles-daemon` (PPD)** and **TUXEDO Control Center (`tccd`)**.
 
@@ -36,7 +36,7 @@ sudo pacman -S --needed base-devel systemd json-c
 
    This installs:
    - `/usr/bin/tcc-power-profiles`
-   - `/etc/tcc-power-profiles/config.json` (only if it does not already exist)
+   - `/etc/tcc-power-profiles/config.json` (default config only if it does not already exist)
    - `/usr/share/dbus-1/system.d/tcc-power-profiles.conf`
    - `/usr/lib/systemd/system/tcc-power-profiles.service`
 
@@ -48,7 +48,7 @@ sudo pacman -S --needed base-devel systemd json-c
      sudo systemctl unmask power-profiles-daemon 2>/dev/null || true
      sudo pacman -R power-profiles-daemon
      ```
-     *(Note: uninstalling `power-profiles-daemon` also removes the `powerprofilesctl` CLI tool, though desktop shells like Noctalia talk directly to D-Bus and do not need it.)*
+     *(Note: uninstalling `power-profiles-daemon` also removes the `powerprofilesctl` CLI tool)*
    - **Option B — Keep `power-profiles-daemon` installed, but masked**:
      ```bash
      sudo systemctl mask --now power-profiles-daemon
@@ -86,7 +86,7 @@ When `config.json` is saved, `tcc-power-profiles` validates the IDs against `tcc
 
 ## AC Plug / Unplug Behavior with TUXEDO Control Center
 
-When you plug or unplug your charger, you may notice `tccd` switching away from the profile you picked in Noctalia/PPD back to TCC's own default profile.
+When you plug or unplug your charger, you may notice `tccd` switching away from the profile you picked in PPD back to TCC's own default profile.
 
 ### Why this happens
 
@@ -99,4 +99,4 @@ When you plug or unplug your charger, you may notice `tccd` switching away from 
 1. In **TUXEDO Control Center**, set your AC and battery default profiles to profiles that are mapped in `/etc/tcc-power-profiles/config.json` (for example, `Default` for AC and `Powersave extreme` for battery, rather than an unmapped custom profile like `TUXEDO Defaults`).
 2. Because `tccd` does not emit a D-Bus signal when its active profile changes, `tcc-power-profiles` polls `tccd` every 1 second (`GetActiveProfileJSON`). Whenever `tccd` switches to another mapped profile on plug/unplug (or from the TCC GUI), `tcc-power-profiles` detects the change and emits `PropertiesChanged` on D-Bus so Noctalia and other desktop widgets update automatically.
 
-*(To avoid racing with `tccd`'s asynchronous profile switch right after you click a profile in Noctalia, syncing is briefly paused for 2.5 seconds after each local profile change.)*
+*(To avoid racing with `tccd`'s asynchronous profile switch right after you click a PPD profile, syncing is briefly paused for 2.5 seconds after each local profile change.)*
