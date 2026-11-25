@@ -105,16 +105,24 @@ int config_init(void) {
   return 0;
 }
 
-void config_reload(void) {
+int config_reload(void) {
   int r = config_init();
   if (r < 0) {
     fprintf(stderr, "Failed to reload config %s\n", strerror(-r));
   }
+  return r;
 }
 
 const char *config_tcc_profile(const char *ppd_name) {
   for (int i = 0; i < MODE_COUNT; i++)
     if (strcmp(ppd_names[i], ppd_name) == 0)
       return tcc_profiles[i];
+  return NULL;
+}
+
+const char *config_ppd_profile(const char *tcc_name) {
+  for (int i = 0; i < MODE_COUNT; i++)
+    if (strcmp(tcc_profiles[i], tcc_name) == 0)
+      return ppd_names[i];
   return NULL;
 }

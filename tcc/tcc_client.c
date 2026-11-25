@@ -13,11 +13,6 @@
 
 static sd_bus *tcc_bus = NULL;
 
-static int log_error(int error, const char *message) {
-  fprintf(stderr, "%s: %s\n", message, strerror(-error));
-  return error;
-}
-
 static char *parse_profile(const char *ans) {
   struct json_object *root = json_tokener_parse(ans);
   if (!root) {
@@ -92,6 +87,11 @@ static int parse_profiles_array(const char *ans, char ***out_ids,
   *out_ids = ids;
   *out_count = len;
   return 0;
+}
+
+int log_error(int error, const char *message) {
+  fprintf(stderr, "%s: %s\n", message, strerror(-error));
+  return error;
 }
 
 int tcc_client_init(void) { return sd_bus_open_system(&tcc_bus); }
