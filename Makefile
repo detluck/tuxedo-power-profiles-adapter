@@ -26,14 +26,16 @@ PREFIX      ?= /usr
 DESTDIR     ?=
 BINDIR      := $(DESTDIR)$(PREFIX)/bin
 DBUS_DIR    := $(DESTDIR)$(PREFIX)/share/dbus-1/system.d
+SYSTEMD_DIR := $(DESTDIR)$(PREFIX)/lib/systemd/system
 
 # Config
 CONFIG_TEMPLATE := config/config.json
 CONFIG_DIR      := $(DESTDIR)/etc/tcc-power-profiles
 CONFIG_FILE     := $(CONFIG_DIR)/config.json
 
-# D-Bus policy
-DBUS_POLICY := dbus/org.freedesktop.UPower.PowerProfiles.conf
+# D-Bus policy & systemd unit
+DBUS_POLICY  := dbus/org.freedesktop.UPower.PowerProfiles.conf
+SYSTEMD_UNIT := systemd/tcc-power-profiles.service
 
 .PHONY: all clean install install-config uninstall
 
@@ -59,11 +61,13 @@ install-config:
 
 install: $(TARGET) install-config
 	install -Dm755 $(TARGET) $(BINDIR)/$(TARGET)
-	install -Dm644 $(DBUS_POLICY) $(DBUS_DIR)/$(notdir $(DBUS_POLICY))
+	install -Dm644 $(DBUS_POLICY) $(DBUS_DIR)/$(TARGET).conf
+	install -Dm644 $(SYSTEMD_UNIT) $(SYSTEMD_DIR)/$(notdir $(SYSTEMD_UNIT))
 
 uninstall:
 	rm -f $(BINDIR)/$(TARGET)
-	rm -f $(DBUS_DIR)/$(notdir $(DBUS_POLICY))
+	rm -f $(DBUS_DIR)/$(TARGET).conf
+	rm -f $(SYSTEMD_DIR)/$(notdir $(SYSTEMD_UNIT))
 	# config is left in place on purpose, it may contain user edits
 
 clean:

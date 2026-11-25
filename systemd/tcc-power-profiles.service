@@ -1,0 +1,13 @@
+[Unit]
+Description=TUXEDO Power Profiles Daemon Adapter
+After=dbus.service tccd.service
+Requires=tccd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tcc-power-profiles
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,9 @@
-#include <json-c/json.h>
+#include <errno.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
 #include <sys/inotify.h>
 #include <systemd/sd-bus.h>
 #include <time.h>
@@ -8,6 +11,14 @@
 
 #include "config/config.h"
 #include "ppd/ppd.h"
+#include "tcc/tcc_client.h"
+
+static volatile sig_atomic_t running = 1;
+
+static void handle_signal(int sig) {
+  (void)sig;
+  running = 0;
+}
 
 // drain the inotify fd. Returns true if config.json was changed.
 static bool inotify_config_changed(int fd) {
@@ -16,7 +27,12 @@ static bool inotify_config_changed(int fd) {
 
   for (;;) {
     ssize_t len = read(fd, buf, sizeof(buf));
-    if (len <= 0)
+    if (len < 0) {
+      if (errno == EINTR)
+        continue;
+      break;
+    }
+    if (len == 0)
       break;
     for (char *p = buf; p < buf + len;) {
       struct inotify_event *ev = (struct inotify_event *)p;
@@ -26,6 +42,12 @@ static bool inotify_config_changed(int fd) {
     }
   }
   return changed;
+}
+
+static uint64_t monotonic_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000L);
 }
 
 static int bus_timeout_ms(sd_bus *bus) {
@@ -38,50 +60,92 @@ static int bus_timeout_ms(sd_bus *bus) {
   return t <= now ? 0 : (int)((t - now + 999) / 1000);
 }
 
-int main(void) {
-  if (config_init() < 0)
-    return 1;
+#define SYNC_INTERVAL_MS 1000ULL
 
+int main(void) {
+  struct sigaction sa = {.sa_handler = handle_signal};
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
+
+  int exit_code = 1;
   sd_bus *bus = NULL;
+  int ifd = -1;
+
+  if (config_init() < 0)
+    goto cleanup;
+
   int r = sd_bus_open_system(&bus);
   if (r < 0) {
     fprintf(stderr, "Failed to open system bus: %s\n", strerror(-r));
-    return 1;
+    goto cleanup;
   }
 
   r = ppd_init(bus);
   if (r < 0)
-    return 1;
+    goto cleanup;
 
-  int ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+  ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
   if (ifd < 0 ||
-      inotify_add_watch(ifd, CONFIG_PATH, IN_CLOSE_WRITE | IN_MOVED_TO) < 0) {
+      inotify_add_watch(ifd, CONFIG_DIR, IN_CLOSE_WRITE | IN_MOVED_TO) < 0) {
     perror("inotify");
-    return 1;
+    goto cleanup;
   }
 
-  for (;;) {
+  uint64_t next_sync = monotonic_ms() + SYNC_INTERVAL_MS;
+
+  while (running) {
     r = sd_bus_process(bus, NULL);
     if (r < 0) {
       fprintf(stderr, "sd_bus_process failed: %s\n", strerror(-r));
-      break;
+      goto cleanup;
     }
     if (r > 0)
       continue; // more messages may be pending, don't sleep yet
+
+    uint64_t now = monotonic_ms();
+    if (now >= next_sync) {
+      ppd_sync(bus);
+      now = monotonic_ms();
+      next_sync = now + SYNC_INTERVAL_MS;
+    }
+
+    int timeout_ms = bus_timeout_ms(bus);
+    int sync_ms = (int)(next_sync - now);
+    if (timeout_ms < 0 || sync_ms < timeout_ms)
+      timeout_ms = sync_ms;
 
     struct pollfd fds[2] = {
         {.fd = sd_bus_get_fd(bus), .events = sd_bus_get_events(bus)},
         {.fd = ifd, .events = POLLIN},
     };
-    if (poll(fds, 2, bus_timeout_ms(bus)) < 0 && errno != EINTR)
-      break;
+    if (poll(fds, 2, timeout_ms) < 0) {
+      if (errno == EINTR)
+        continue;
+      perror("poll");
+      goto cleanup;
+    }
 
     if ((fds[1].revents & POLLIN) && inotify_config_changed(ifd)) {
       if (config_reload() == 0)
         ppd_reapply();
     }
+
+    now = monotonic_ms();
+    if (now >= next_sync) {
+      ppd_sync(bus);
+      next_sync = monotonic_ms() + SYNC_INTERVAL_MS;
+    }
   }
 
-  sd_bus_flush_close_unref(bus);
-  return 1;
+  exit_code = 0;
+
+cleanup:
+  if (ifd >= 0)
+    close(ifd);
+  if (bus)
+    sd_bus_flush_close_unref(bus);
+  ppd_cleanup();
+  tcc_client_cleanup();
+  return exit_code;
 }

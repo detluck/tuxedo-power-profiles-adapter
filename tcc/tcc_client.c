@@ -1,5 +1,8 @@
 #include "tcc_client.h"
+#include <errno.h>
 #include <json-c/json.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <systemd/sd-bus.h>
 
@@ -13,11 +16,11 @@
 
 static sd_bus *tcc_bus = NULL;
 
-static char *parse_profile(const char *ans) {
+static int parse_profile(const char *ans, char **out) {
   struct json_object *root = json_tokener_parse(ans);
   if (!root) {
     fprintf(stderr, "Failed to parse active profile JSON\n");
-    return NULL;
+    return -EINVAL;
   }
 
   struct json_object *id_obj = NULL;
@@ -25,13 +28,12 @@ static char *parse_profile(const char *ans) {
       !json_object_is_type(id_obj, json_type_string)) {
     fprintf(stderr, "Missing 'id' field in active profile JSON\n");
     json_object_put(root);
-    return NULL;
+    return -EINVAL;
   }
 
-  char *out = NULL;
-  out = strdup(json_object_get_string(id_obj));
+  *out = strdup(json_object_get_string(id_obj));
   json_object_put(root);
-  return out;
+  return *out ? 0 : -ENOMEM;
 }
 
 static int parse_profiles_array(const char *ans, char ***out_ids,
@@ -94,11 +96,20 @@ int log_error(int error, const char *message) {
   return error;
 }
 
-int tcc_client_init(void) { return sd_bus_open_system(&tcc_bus); }
+int tcc_client_init(void) {
+  if (tcc_bus)
+    return 0;
+  int r = sd_bus_open_system(&tcc_bus);
+  if (r < 0)
+    return log_error(r, "Failed to connect to the system bus");
+  return 0;
+}
 
 void tcc_client_cleanup(void) {
-  sd_bus_unref(tcc_bus);
-  tcc_bus = NULL;
+  if (tcc_bus) {
+    sd_bus_flush_close_unref(tcc_bus);
+    tcc_bus = NULL;
+  }
 }
 
 int tcc_get_profiles(char ***profile_ids, size_t *count) {
@@ -135,33 +146,27 @@ int tcc_get_active_profile(char **profile_id) {
   if (profile_id == NULL) {
     return -EINVAL;
   }
+  *profile_id = NULL;
+
+  int r = tcc_client_init();
+  if (r < 0) {
+    return r;
+  }
+
   _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
   _cleanup_(sd_bus_message_unrefp) sd_bus_message *reply = NULL;
-
-  int r;
-  if (!tcc_bus) {
-    r = tcc_client_init();
-    if (r < 0) {
-      log_error(r, "Failed to connect to the system bus");
-    }
-  }
 
   r = sd_bus_call_method(tcc_bus, TCCD_BUS, TCCD_PATH, TCCD_INTERFACE,
                          TCCD_METHOD_GET_ACTIVE_PROFILE, &error, &reply, "");
   if (r < 0)
-    return log_error(r, TCCD_METHOD_GET_PROFILES "call failed");
+    return log_error(r, TCCD_METHOD_GET_ACTIVE_PROFILE " call failed");
 
-  const char *ans;
+  const char *ans = NULL;
   r = sd_bus_message_read(reply, "s", &ans);
   if (r < 0)
     return log_error(r, "Failed to read reply");
 
-  *profile_id = parse_profile(ans);
-
-  if (!*profile_id) {
-    return -ENOMEM;
-  }
-  return 0;
+  return parse_profile(ans, profile_id);
 }
 
 int tcc_set_profile(const char *profile_id) {
@@ -169,21 +174,30 @@ int tcc_set_profile(const char *profile_id) {
     return -EINVAL;
   }
 
-  _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
-
-  int r;
-  if (!tcc_bus) {
-    r = tcc_client_init();
-    if (r < 0) {
-      log_error(r, "Failed to connect to the system bus");
-    }
+  int r = tcc_client_init();
+  if (r < 0) {
+    return r;
   }
-  r = sd_bus_call_method(tcc_bus, TCCD_BUS, TCCD_PATH, TCCD_INTERFACE,
-                         TCCD_METHOD_SET_PROFILE, &error, NULL, "s",
-                         profile_id);
 
+  _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
+  _cleanup_(sd_bus_message_unrefp) sd_bus_message *reply = NULL;
+
+  r = sd_bus_call_method(tcc_bus, TCCD_BUS, TCCD_PATH, TCCD_INTERFACE,
+                         TCCD_METHOD_SET_PROFILE, &error, &reply, "s",
+                         profile_id);
   if (r < 0)
-    return log_error(r, TCCD_METHOD_GET_PROFILES "call failed");
+    return log_error(r, TCCD_METHOD_SET_PROFILE " call failed");
+
+  int accepted = 0;
+  r = sd_bus_message_read(reply, "b", &accepted);
+  if (r < 0)
+    return log_error(r, "Failed to read SetTempProfileById reply");
+
+  if (!accepted) {
+    fprintf(stderr, "%s rejected profile '%s'\n", TCCD_METHOD_SET_PROFILE,
+            profile_id);
+    return -EIO;
+  }
 
   return 0;
 }
