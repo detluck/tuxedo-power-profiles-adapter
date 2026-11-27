@@ -18,6 +18,10 @@
 #define PPD_LEGACY_INTERFACE "net.hadess.PowerProfiles"
 #define PPD_LEGACY_PATH "/net/hadess/PowerProfiles"
 
+// polkit actions
+#define POLKIT_ACTION_SWITCH_PROFILE "org.freedesktop.UPower.PowerProfiles.switch-profile"
+#define POLKIT_ACTION_HOLD_PROFILE "org.freedesktop.UPower.PowerProfiles.hold-profile"
+
 // methods
 #define PPD_METHOD_HOLD_PROFILE "HoldProfile"
 #define PPD_METHOD_RELEASE_PROFILE "ReleaseProfile"
@@ -113,9 +117,10 @@ static int init_state(struct state *s) {
       initial = mapped;
       needs_apply = false;
     } else {
-      fprintf(stderr,
-              "Active TCC profile '%s' is not mapped in config, applying '%s'\n",
-              tcc_active, initial);
+      fprintf(
+          stderr,
+          "Active TCC profile '%s' is not mapped in config, applying '%s'\n",
+          tcc_active, initial);
     }
   } else {
     log_error(r, "Failed to get active TCC profile, assuming balanced");
@@ -178,12 +183,59 @@ static void emit_profile_released(sd_bus *bus, struct hold *h) {
   emit_profile_released_on(bus, PPD_LEGACY_PATH, PPD_LEGACY_INTERFACE, h);
 }
 
+static int check_authorized(sd_bus *bus, const char *action,
+                            sd_bus_error *error) {
+  sd_bus_message *msg = sd_bus_get_current_message(bus);
+  const char *sender = msg ? sd_bus_message_get_sender(msg) : NULL;
+  if (!sender)
+    return sd_bus_error_set(error, SD_BUS_ERROR_ACCESS_DENIED, "No sender");
+
+  // root: allow directly
+  sd_bus_creds *creds = NULL;
+  int r = sd_bus_query_sender_creds(msg, SD_BUS_CREDS_UID, &creds);
+  if (r >= 0) {
+    uid_t uid;
+    int ok = sd_bus_creds_get_uid(creds, &uid);
+    sd_bus_creds_unref(creds);
+    if (ok >= 0 && uid == 0)
+      return 0;
+  }
+
+  sd_bus_message *reply = NULL;
+  r = sd_bus_call_method(bus, "org.freedesktop.PolicyKit1",
+                         "/org/freedesktop/PolicyKit1/Authority",
+                         "org.freedesktop.PolicyKit1.Authority",
+                         "CheckAuthorization", NULL, &reply,
+                         "(sa{sv})sa{ss}us",
+                         "system-bus-name", 1, "name", "s", sender,
+                         action, 0, 0 /* non-interactive */, "");
+  if (r < 0)
+    return sd_bus_error_setf(error, SD_BUS_ERROR_ACCESS_DENIED,
+                             "Polkit check failed: %s", strerror(-r));
+
+  int authorized = 0, challenge = 0;
+  r = sd_bus_message_enter_container(reply, 'r', "bba{ss}");
+  if (r >= 0)
+    r = sd_bus_message_read(reply, "bb", &authorized, &challenge);
+  sd_bus_message_unref(reply);
+
+  if (r < 0 || !authorized)
+    return sd_bus_error_setf(error, SD_BUS_ERROR_ACCESS_DENIED,
+                             "Not authorized: %s", action);
+  return 0;
+}
+
 static int method_hold_profile(sd_bus_message *m, void *userdata,
                                sd_bus_error *error) {
   struct state *s = userdata;
   const char *profile, *reason, *app_id;
 
-  int r = sd_bus_message_read(m, "sss", &profile, &reason, &app_id);
+  int r = check_authorized(sd_bus_message_get_bus(m), POLKIT_ACTION_HOLD_PROFILE,
+                           error);
+  if (r < 0)
+    return r;
+
+  r = sd_bus_message_read(m, "sss", &profile, &reason, &app_id);
   if (r < 0) {
     return log_error(r, "Failed to read dbus message");
   }
@@ -282,7 +334,7 @@ static int on_name_owner_changed(sd_bus_message *m, void *userdata,
   const char *name, *old_owner, *new_owner;
 
   int r = sd_bus_message_read(m, "sss", &name, &old_owner, &new_owner);
-  if (r < 0 || !old_owner || (new_owner && *new_owner != '\0'))
+  if (r < 0 || strcmp(name, old_owner) != 0 || (new_owner && *new_owner))
     return 0;
 
   bool removed = false;
@@ -337,8 +389,12 @@ static int prop_active_profile_set(sd_bus *bus, const char *path,
   (void)property;
   struct state *s = userdata;
 
+  int r = check_authorized(bus, POLKIT_ACTION_SWITCH_PROFILE, error);
+  if (r < 0)
+    return r;
+
   const char *profile;
-  int r = sd_bus_message_read(reply, "s", &profile);
+  r = sd_bus_message_read(reply, "s", &profile);
   if (r < 0) {
     return log_error(r, "Failed to read dbus message");
   }
@@ -551,8 +607,8 @@ int ppd_init(sd_bus *bus) {
   if (r < 0)
     return log_error(r, "Failed to add UPower vtable");
 
-  r = sd_bus_add_object_vtable(bus, NULL, PPD_LEGACY_PATH,
-                               PPD_LEGACY_INTERFACE, ppd_vtable, &state);
+  r = sd_bus_add_object_vtable(bus, NULL, PPD_LEGACY_PATH, PPD_LEGACY_INTERFACE,
+                               ppd_vtable, &state);
   if (r < 0)
     return log_error(r, "Failed to add legacy vtable");
 

@@ -27,17 +27,19 @@ DESTDIR     ?=
 BINDIR      := $(DESTDIR)$(PREFIX)/bin
 DBUS_DIR    := $(DESTDIR)$(PREFIX)/share/dbus-1/system.d
 SYSTEMD_DIR := $(DESTDIR)$(PREFIX)/lib/systemd/system
+POLKIT_DIR  := $(DESTDIR)$(PREFIX)/share/polkit-1/actions
 
 # Config
 CONFIG_TEMPLATE := config/config.json
 CONFIG_DIR      := $(DESTDIR)/etc/tcc-power-profiles
 CONFIG_FILE     := $(CONFIG_DIR)/config.json
 
-# D-Bus policy & systemd unit
-DBUS_POLICY  := dbus/org.freedesktop.UPower.PowerProfiles.conf
-SYSTEMD_UNIT := systemd/tcc-power-profiles.service
+# D-Bus policy, systemd unit & polkit policy
+DBUS_POLICY   := dbus/org.freedesktop.UPower.PowerProfiles.conf
+SYSTEMD_UNIT  := systemd/tcc-power-profiles.service
+POLKIT_POLICY := polkit/tcc-power-profiles.policy
 
-.PHONY: all clean install install-config uninstall
+.PHONY: all clean install install-config install-polkit uninstall
 
 all: $(TARGET)
 
@@ -59,7 +61,17 @@ install-config:
 		install -Dm644 "$(CONFIG_TEMPLATE)" "$(CONFIG_FILE)"; \
 	fi
 
-install: $(TARGET) install-config
+# Install polkit policy only if power-profiles-daemon's policy or our own isn't already present
+install-polkit:
+	@if [ ! -f "$(POLKIT_DIR)/power-profiles-daemon.policy" ] && \
+	    [ ! -f "$(POLKIT_DIR)/tcc-power-profiles.policy" ]; then \
+		echo "Installing Polkit action policy..."; \
+		install -Dm644 "$(POLKIT_POLICY)" "$(POLKIT_DIR)/tcc-power-profiles.policy"; \
+	else \
+		echo "Polkit action policy already present. Skipping."; \
+	fi
+
+install: $(TARGET) install-config install-polkit
 	install -Dm755 $(TARGET) $(BINDIR)/$(TARGET)
 	install -Dm644 $(DBUS_POLICY) $(DBUS_DIR)/$(TARGET).conf
 	install -Dm644 $(SYSTEMD_UNIT) $(SYSTEMD_DIR)/$(notdir $(SYSTEMD_UNIT))
@@ -68,6 +80,7 @@ uninstall:
 	rm -f $(BINDIR)/$(TARGET)
 	rm -f $(DBUS_DIR)/$(TARGET).conf
 	rm -f $(SYSTEMD_DIR)/$(notdir $(SYSTEMD_UNIT))
+	rm -f $(POLKIT_DIR)/tcc-power-profiles.policy
 	# config is left in place on purpose, it may contain user edits
 
 clean:
