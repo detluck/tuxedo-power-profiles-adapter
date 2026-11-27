@@ -13,8 +13,38 @@
 #include "ppd/ppd.h"
 #include "tcc/tcc_client.h"
 
+#define TCCD_NAME "com.tuxedocomputers.tccd"
+
 static volatile sig_atomic_t running = 1;
 
+static int name_has_owner(sd_bus *bus, const char *name) {
+  sd_bus_message *reply = NULL;
+  int has = 0;
+
+  int r = sd_bus_call_method(bus, "org.freedesktop.DBus",
+                             "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                             "NameHasOwner", NULL, &reply, "s", name);
+  if (r < 0)
+    return r;
+
+  r = sd_bus_message_read(reply, "b", &has);
+  sd_bus_message_unref(reply);
+  return r < 0 ? r : has;
+}
+
+static int wait_for_tccd(sd_bus *bus, int timeout_s) {
+  struct timespec ts = {.tv_nsec = 500 * 1000 * 1000};
+
+  for (int i = 0; i < timeout_s * 2; i++) {
+    int r = name_has_owner(bus, TCCD_NAME);
+    if (r < 0)
+      return r;
+    if (r > 0)
+      return 0;
+    nanosleep(&ts, NULL);
+  }
+  return -ETIMEDOUT;
+}
 static void handle_signal(int sig) {
   (void)sig;
   running = 0;
@@ -72,14 +102,20 @@ int main(void) {
   sd_bus *bus = NULL;
   int ifd = -1;
 
-  if (config_init() < 0)
-    goto cleanup;
-
   int r = sd_bus_open_system(&bus);
   if (r < 0) {
     fprintf(stderr, "Failed to open system bus: %s\n", strerror(-r));
     goto cleanup;
   }
+
+  r = wait_for_tccd(bus, 30);
+  if (r < 0) {
+    fprintf(stderr, "tccd did not appear on the bus: %s\n", strerror(-r));
+    goto cleanup;
+  }
+
+  if (config_init() < 0)
+    goto cleanup;
 
   r = ppd_init(bus);
   if (r < 0)
