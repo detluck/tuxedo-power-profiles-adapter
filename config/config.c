@@ -83,7 +83,7 @@ static int config_validate(char cfg[MODE_COUNT][PROFILE_LEN]) {
     if (!tcc_has_profile(profiles, count, cfg[i])) {
       fprintf(stderr, "TCC has no profile '%s' (for %s)\n", cfg[i],
               ppd_names[i]);
-      result = -ENOENT;
+      result = -EINVAL;
     }
   }
 
@@ -108,7 +108,10 @@ int config_init(void) {
 int config_reload(void) {
   int r = config_init();
   if (r < 0) {
-    fprintf(stderr, "Failed to reload config %s\n", strerror(-r));
+    if (r == -EINVAL)
+      fprintf(stderr, "Failed to reload config: invalid profile mapping\n");
+    else
+      fprintf(stderr, "Failed to reload config: %s\n", strerror(-r));
   }
   return r;
 }

@@ -119,8 +119,9 @@ static int init_state(struct state *s) {
     } else {
       fprintf(
           stderr,
-          "Active TCC profile '%s' is not mapped in config, applying '%s'\n",
+          "Active TCC profile '%s' is not mapped in config, falling back to '%s'\n",
           tcc_active, initial);
+      needs_apply = false;
     }
   } else {
     log_error(r, "Failed to get active TCC profile, assuming balanced");
@@ -647,9 +648,24 @@ void ppd_sync(sd_bus *bus) {
     return;
   }
 
+  static char last_unmapped[64] = {0};
   const char *mapped = config_ppd_profile(tcc_active);
+  if (!mapped) {
+    if (strcmp(last_unmapped, tcc_active) != 0) {
+      strncpy(last_unmapped, tcc_active, sizeof(last_unmapped) - 1);
+      last_unmapped[sizeof(last_unmapped) - 1] = '\0';
+      fprintf(
+          stderr,
+          "Active TCC profile '%s' is not mapped in config, falling back to 'balanced'\n",
+          tcc_active);
+    }
+    mapped = "balanced";
+  } else {
+    last_unmapped[0] = '\0';
+  }
   free(tcc_active);
-  if (!mapped || strcmp(mapped, state.active) == 0)
+
+  if (strcmp(mapped, state.active) == 0)
     return;
 
   char *new_active = strdup(mapped);
